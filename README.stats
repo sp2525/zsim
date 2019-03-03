@@ -14,7 +14,8 @@ import h5py # presents HDF5 files as numpy arrays
 import numpy as np
 
 # Open stats file
-f = h5py.File('zsim-ev.h5', 'r')
+#f = h5py.File('zsim-ev.h5', 'r')
+f = h5py.File('zsim.h5', 'r')
 
 # Get the single dataset in the file
 dset = f["stats"]["root"]
@@ -26,20 +27,20 @@ dset = f["stats"]["root"]
 
 # Phase count at end of simulation
 endPhase = dset[-1]['phase']
-print endPhase
+print "Phase count:", endPhase
 
 # If your L2 has a single bank, this is all the L2 hits. Otherwise it's the
 # hits of the first L2 bank
-l2_0_hits = dset[-1]['l2'][0]['hGETS'] + dset[-1]['l2'][0]['hGETX']
-print l2_0_hits
+#l2_0_hits = dset[-1]['l2'][0]['hGETS'] + dset[-1]['l2'][0]['hGETX']
 
 # Hits into all L2s
 l2_hits = np.sum(dset[-1]['l2']['hGETS'] + dset[-1]['l2']['hGETX'])
-print l2_hits
+print "l2_hits:" l2_hits
 
 # Total number of instructions executed, counted by adding per-core counts
 # (you could also look at procInstrs)
-totalInstrs = np.sum(dset[-1]['simpleCore']['instrs'])
+#totalInstrs = np.sum(dset[-1]['simpleCore']['instrs'])
+totalInstrs = np.sum(dset[-1]['c']['instrs'])
 print totalInstrs
 
 # You can also focus on one sample, or index over multiple steps, e.g.,
