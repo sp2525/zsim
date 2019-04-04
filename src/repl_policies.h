@@ -29,8 +29,10 @@
 #include <functional>
 #include "bithacks.h"
 #include "cache_arrays.h"
+#include "tlb_arrays.h"
 #include "coherence_ctrls.h"
 #include "memory_hierarchy.h"
+#include "translation_hierarchy.h"
 #include "mtrand.h"
 
 /* Generic replacement policy interface. A replacement policy is initialized by the cache (by calling setTop/BottomCC) and used by the cache array. Usage follows two models:
@@ -89,6 +91,57 @@ class LegacyReplPolicy : public virtual ReplPolicy {
         }
 
         DECL_RANK_BINDINGS;
+};
+
+/* Replacement Policy for TLBs */
+
+class TLBReplPolicy : public GlobAlloc {
+    public:
+        TLBReplPolicy() {}
+
+        virtual void update(uint32_t id, const TransReq* req) = 0;
+        virtual void replaced(uint32_t id) = 0;
+
+        virtual uint32_t rankCands(const TransReq* req, SetAssocTLBCands cands) = 0;
+
+        virtual void initStats(AggregateStat* parent) {}
+};
+
+class TLBLRUReplPolicy : public TLBReplPolicy {
+    protected:
+        uint64_t timestamp; // incremented on each access
+        uint64_t* array;
+        uint32_t numEntries;
+
+    public:
+        explicit TLBLRUReplPolicy(uint32_t _numEntries) : timestamp(1), numEntries(_numEntries) {
+            array = gm_calloc<uint64_t>(numEntries);
+        }
+
+        ~TLBLRUReplPolicy() {
+            gm_free(array);
+        }
+
+        void update(uint32_t id, const TransReq* req) {
+            array[id] = timestamp++;
+        }
+
+        void replaced(uint32_t id) {
+            array[id] = 0;
+        }
+
+        template <typename C> inline uint32_t rank(const TransReq* req, C cands) {
+            uint32_t bestCand = -1;
+            uint64_t bestScore = (uint64_t)-1L;
+            for (auto ci = cands.begin(); ci != cands.end(); ci.inc()) {
+                uint32_t s = array[*ci];
+                bestCand = (s < bestScore)? *ci : bestCand;
+                bestScore = MIN(s, bestScore);
+            }
+            return bestCand;
+        }
+
+        uint32_t rankCands(const TransReq* req, SetAssocTLBCands cands) { return rank(req, cands); }
 };
 
 /* Plain ol' LRU, though this one is sharers-aware, prioritizing lines that have

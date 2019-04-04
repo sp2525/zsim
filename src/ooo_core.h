@@ -39,6 +39,7 @@
 // #define OOO_STALL_STATS
 
 class FilterCache;
+class FilterTLB;
 
 /* 2-level branch predictor:
  *  - L1: Branch history shift registers (bshr): 2^NB entries, HB bits of history/entry, indexed by XOR'd PC
@@ -362,6 +363,8 @@ class OOOCore : public Core {
     private:
         FilterCache* l1i;
         FilterCache* l1d;
+        //FilterTLB*   l1itlb;
+        FilterTLB*   l1dtlb;
 
         uint64_t phaseEndCycle; //next stopping point
 
@@ -434,7 +437,8 @@ class OOOCore : public Core {
         OOOCoreRecorder cRec;
 
     public:
-        OOOCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name);
+        OOOCore(FilterCache* _l1i, FilterCache* _l1d, FilterTLB* _l1dtlb,  g_string& _name);
+        //OOOCore(FilterCache* _l1i, FilterCache* _l1d,  g_string& _name);
 
         void initStats(AggregateStat* parentStat);
 

@@ -31,6 +31,9 @@
 #include <string>
 #include <sys/time.h>
 #include <vector>
+#include "tlb.h"
+#include "tlb_arrays.h"
+#include "filter_tlb.h"
 #include "cache.h"
 #include "cache_arrays.h"
 #include "config.h"
@@ -77,10 +80,141 @@
 
 extern void EndOfPhaseActions(); //in zsim.cpp
 
-/* zsim should be initialized in a deterministic and logical order, to avoid re-reading config vars
- * all over the place and give a predictable global state to constructors. Ideally, this should just
- * follow the layout of zinfo, top-down.
- */
+
+BaseTLB* BuildTLB(Config& config, const string& prefix, g_string& name, bool isTerminal) {
+    string type = config.get<const char*>(prefix + "type", "Simple");
+
+    uint32_t pageSize = zinfo->pageSize;
+    assert(pageSize > 0); //avoid config deps
+
+    uint32_t numEntries = config.get<uint32_t>(prefix + "entries", 64);
+
+    //Array
+    uint32_t numHashes = 1;
+    string arrayType = config.get<const char*>(prefix + "array.type", "SetAssoc");
+    uint32_t ways = config.get<uint32_t>(prefix + "array.ways", 4);
+    assert(numEntries % ways == 0); 
+    //uint32_t candidates = ways;
+
+    //Need to know number of hash functions before instantiating array
+    if (arrayType == "SetAssoc") {
+        numHashes = 1;
+    } else if (arrayType == "IdealLRU" || arrayType == "IdealLRUPart") {
+        ways = numEntries;
+        numHashes = 0;
+    } else {
+        panic("%s: Invalid array type %s", name.c_str(), arrayType.c_str());
+    }
+
+    // Power of two sets check; also compute setBits, will be useful later
+    uint32_t numSets = numEntries/ways;
+    uint32_t setBits = 31 - __builtin_clz(numSets);
+    if ((1u << setBits) != numSets) panic("%s: Number of sets must be a power of two (you specified %d sets)", name.c_str(), numSets);
+
+    //Hash function
+    HashFamily* hf = nullptr;
+    string hashType = config.get<const char*>(prefix + "array.hash", "None");
+    if (numHashes) {
+        if (hashType == "None") {
+            assert(numHashes == 1);
+            hf = new IdHashFamily;
+        } else if (hashType == "H3") {
+            //STL hash function
+            size_t seed = _Fnv_hash_bytes(prefix.c_str(), prefix.size()+1, 0xB4AC5B);
+            //info("%s -> %lx", prefix.c_str(), seed);
+            hf = new H3HashFamily(numHashes, setBits, 0xCAC7EAFFA1 + seed /*make randSeed depend on prefix*/);
+        } else if (hashType == "SHA1") {
+            hf = new SHA1HashFamily(numHashes);
+        } else {
+            panic("%s: Invalid value %s on array.hash", name.c_str(), hashType.c_str());
+        }
+    }
+
+    //Replacement policy
+    string replType = config.get<const char*>(prefix + "repl.type", (arrayType == "IdealLRUPart")? "IdealLRUPart" : "LRU");
+    TLBReplPolicy* rp = nullptr;
+
+    if (replType == "LRU" || replType == "LRUNoSh") {
+        rp = new TLBLRUReplPolicy(numEntries);
+    //} else if (replType == "Rand") {
+    //    rp = new RandReplPolicy(candidates);
+    } else {
+        panic("%s: Invalid replacement type %s", name.c_str(), replType.c_str());
+    }
+    assert(rp);
+
+    //Alright, build the array
+    TLBArray* array = nullptr;
+    if (arrayType == "SetAssoc") {
+        array = new SetAssocTLBArray(numEntries, ways, rp, hf);
+    //} else if (arrayType == "IdealLRU") {
+    //    assert(replType == "LRU");
+    //    assert(!hf);
+    //    IdealLRUArray* ila = new IdealLRUArray(numLines);
+    //    rp = ila->getRP();
+    //    array = ila;
+    //} else if (arrayType == "IdealLRUPart") {
+    //    assert(!hf);
+    //    IdealLRUPartReplPolicy* irp = dynamic_cast<IdealLRUPartReplPolicy*>(rp);
+    //    if (!irp) panic("IdealLRUPart array needs IdealLRUPart repl policy!");
+    //    array = new IdealLRUPartArray(numLines, irp);
+    } else {
+        panic("This should not happen, we already checked for it!"); //unless someone changed arrayStr...
+    }
+
+    //Latency
+    uint32_t latency = config.get<uint32_t>(prefix + "latency", 5);
+    uint32_t accLat = (isTerminal)? 0 : latency; //terminal tlbs has no access latency b/c it is assumed accLat is hidden by the pipeline
+    uint32_t invLat = latency;
+
+    // Inclusion?
+    //bool inclusive = config.get<bool>(prefix + "inclusive", false);
+
+    // Finally, build the tlb
+    TLB* tlb;
+    if (!isTerminal) {
+        if (type == "Simple") {
+            tlb = new TLB(numEntries, array, rp, accLat, invLat, name);
+        } else {
+            panic("Invalid cache type %s", type.c_str());
+        }
+    } else {
+        //Filter tlb optimization
+        if (type != "Simple") panic("Terminal cache %s can only have type == Simple", name.c_str());
+        if (arrayType != "SetAssoc" || hashType != "None" || replType != "LRU") panic("Invalid FilterTLB config %s", name.c_str());
+        tlb = new FilterTLB(numSets, numEntries, array, rp, accLat, invLat, name);
+    }
+
+#if 0
+    info("Built L%d bank, %d bytes, %d lines, %d ways (%d candidates if array is Z), %s array, %s hash, %s replacement, accLat %d, invLat %d name %s",
+            level, bankSize, numLines, ways, candidates, arrayType.c_str(), hashType.c_str(), replType.c_str(), accLat, invLat, name.c_str());
+#endif
+
+    return tlb;
+}
+
+typedef vector<BaseTLB*> TLBGroup;
+
+TLBGroup* BuildTLBGroup(Config& config, const string& name, bool isTerminal) {
+    TLBGroup* tgp = new TLBGroup;
+    TLBGroup& tg = *tgp;
+
+    string prefix = "sys.tlbs." + name + ".";
+
+    //uint32_t entries = config.get<uint32_t>(prefix + "entries", 64);
+    uint32_t tlbs = config.get<uint32_t>(prefix + "tlbs", 1);
+
+    tg.resize(tlbs);
+
+    for (uint32_t i = 0; i < tlbs; i++) {
+        stringstream ss;
+        ss << name << "-" << i;
+        g_string TLBName(ss.str().c_str());
+        tg[i] = BuildTLB(config, prefix, TLBName, isTerminal);
+    }
+
+    return tgp;
+}
 
 BaseCache* BuildCacheBank(Config& config, const string& prefix, g_string& name, uint32_t bankSize, bool isTerminal, uint32_t domain) {
     string type = config.get<const char*>(prefix + "type", "Simple");
@@ -437,10 +571,84 @@ static void InitSystem(Config& config) {
     string networkFile = config.get<const char*>("sys.networkFile", "");
     Network* network = (networkFile != "")? new Network(networkFile.c_str()) : nullptr;
 
+    //Connect everything
+    bool printHierarchy = config.get<bool>("sim.printHierarchy", false);
+
+    string prefix;
+
+    
+    // Build the tlbs
+    vector<const char*> tlbGroupNames;
+    config.subgroups("sys.tlbs", tlbGroupNames);
+    prefix = "sys.tlbs.";
+    unordered_map<string, string> tlbParentMap; //child -> parent
+    vector<string> parentNames;
+    unordered_map<string, TLBGroup*> tlbMap;
+
+    // set tlbParentMap
+    auto it = parentNames.begin();
+    for (const char* grp : tlbGroupNames) {
+        string group(grp);
+        string parent = config.get<const char*>(prefix + group + ".parent", "");
+        if ((parent != "") && (std::find(parentNames.begin(), parentNames.end(), parent) == parentNames.end())) {
+            it = parentNames.insert(it, parent);
+        }
+        tlbParentMap[group] = parent;
+        info("set tlbParentMap: child \"%s\" => parent \"%s\"", group.c_str(), parent.c_str());
+    }
+
+    // build TLBgroups
+    for (const char* grp : tlbGroupNames) {
+        string group(grp);
+        bool isTerminal = (std::find(parentNames.begin(), parentNames.end(), group) == parentNames.end());
+        tlbMap[group] = BuildTLBGroup(config, group, isTerminal);
+    }
+    info("build TLB groups");
+
+    // Check that parents are valid (another tlb or ptw)
+    for (auto& it : tlbParentMap) {
+        if (it.second != "") {
+            bool found = false;
+            for (auto& grp : tlbGroupNames) found |= it.second == grp;
+            //for (auto& grp : ptwGroupNames) found |= it.second == grp;
+            if (!found) panic("%s has invalid parent %s", it.first.c_str(), it.second.c_str());
+        }
+    }
+
+    // set parents of tlbs
+    for (const char* grp : tlbGroupNames) {
+
+        TLBGroup& childTLBGroup = *tlbMap[grp];
+        uint32_t children = childTLBGroup.size();
+        assert(children);
+
+        if (tlbParentMap[grp] == "")
+          continue;
+
+        TLBGroup& parentTLBGroup = *tlbMap[tlbParentMap[grp]];
+
+        uint32_t parents = parentTLBGroup.size();
+        assert(parents);
+
+        assert(children == parents);
+
+        for (uint32_t i = 0; i < children; i++) {
+            BaseTLB* parentTLB = parentTLBGroup[i];
+            childTLBGroup[i]->setParent(parentTLB);
+            //if (printHierarchy) {
+            if (true) {
+              string childName = childTLBGroup[i]->getName();
+              string parentName = parentTLBGroup[i]->getName();
+              info("Hierarchy: %s -> %s", childName.c_str(), parentName.c_str());
+            }
+        }
+    }
+    info("finished setting parents of tlbs");
+
     // Build the caches
     vector<const char*> cacheGroupNames;
     config.subgroups("sys.caches", cacheGroupNames);
-    string prefix = "sys.caches.";
+    prefix = "sys.caches.";
 
     for (const char* grp : cacheGroupNames) {
         string group(grp);
@@ -517,9 +725,6 @@ static void InitSystem(Config& config) {
             mems[0] = splitter;
         }
     }
-
-    //Connect everything
-    bool printHierarchy = config.get<bool>("sim.printHierarchy", false);
 
     // mem to llc is a bit special, only one llc
     uint32_t childId = 0;
@@ -606,6 +811,10 @@ static void InitSystem(Config& config) {
         }
     }
 
+//    //Tracks how many tlbs have been allocated to cores
+    unordered_map<string, uint32_t> assignedTLBs;
+    for (const char* grp : tlbGroupNames) assignedTLBs[grp] = 0;
+
     //Tracks how many terminal caches have been allocated to cores
     unordered_map<string, uint32_t> assignedCaches;
     for (const char* grp : cacheGroupNames) if (isTerminal(grp)) assignedCaches[grp] = 0;
@@ -647,9 +856,14 @@ static void InitSystem(Config& config) {
             }
 
             if (type != "Null") {
+                //string itlb = config.get<const char*>(prefix + "itlb");
+                string dtlb = config.get<const char*>(prefix + "dtlb");
+
                 string icache = config.get<const char*>(prefix + "icache");
                 string dcache = config.get<const char*>(prefix + "dcache");
 
+                //if (!assignedTLBs.count(itlb)) panic("%s: Invalid itlb parameter %s", group, itlb.c_str());
+                if (!assignedTLBs.count(dtlb)) panic("%s: Invalid dtlb parameter %s", group, dtlb.c_str());
                 if (!assignedCaches.count(icache)) panic("%s: Invalid icache parameter %s", group, icache.c_str());
                 if (!assignedCaches.count(dcache)) panic("%s: Invalid dcache parameter %s", group, dcache.c_str());
 
@@ -658,6 +872,21 @@ static void InitSystem(Config& config) {
                     ss << group << "-" << j;
                     g_string name(ss.str().c_str());
                     Core* core;
+
+                    //Get the tlbs
+                    //TLBGroup& itlbgroup = *tlbMap[itlb];
+                    TLBGroup& dtlbgroup = *tlbMap[dtlb];
+
+                    //assert(cores == itlbgroup.size());
+                    assert(cores == dtlbgroup.size());
+
+                    //FilterTLB* itlb = dynamic_cast<FilterTLB*>(itlbgroup[coreIdx]);
+                    //assert(itlb);
+                    //itlb->setSourceId(coreIdx);
+
+                    FilterTLB* dt = dynamic_cast<FilterTLB*>(dtlbgroup[coreIdx]);
+                    assert(dt);
+                    dt->setSourceId(coreIdx);
 
                     //Get the caches
                     CacheGroup& igroup = *cMap[icache];
@@ -691,7 +920,8 @@ static void InitSystem(Config& config) {
                         core = tcore;
                     } else {
                         assert(type == "OOO");
-                        OOOCore* ocore = new (&oooCores[j]) OOOCore(ic, dc, name);
+                        OOOCore* ocore = new (&oooCores[j]) OOOCore(ic, dc, dt, name);
+                        //OOOCore* ocore = new (&oooCores[j]) OOOCore(ic, dc, name);
                         zinfo->eventRecorders[coreIdx] = ocore->getEventRecorder();
                         zinfo->eventRecorders[coreIdx]->setSourceId(coreIdx);
                         core = ocore;
@@ -755,6 +985,14 @@ static void InitSystem(Config& config) {
         zinfo->traceDriver->initStats(zinfo->rootStat);
     }
 
+    //Init stats: tlbs
+    for (const char* group : tlbGroupNames) {
+        AggregateStat* groupStat = new AggregateStat(true);
+        groupStat->init(gm_strdup(group), "TLB stats");
+        for (BaseTLB* tlb : *tlbMap[group]) tlb->initStats(groupStat);
+        zinfo->rootStat->append(groupStat);
+    }
+
     //Init stats: caches, mem
     for (const char* group : cacheGroupNames) {
         AggregateStat* groupStat = new AggregateStat(true);
@@ -774,6 +1012,8 @@ static void InitSystem(Config& config) {
     //Odds and ends: BuildCacheGroup new'd the cache groups, we need to delete them
     for (pair<string, CacheGroup*> kv : cMap) delete kv.second;
     cMap.clear();
+    for (pair<string, TLBGroup*> kv : tlbMap) delete kv.second;
+    tlbMap.clear();
 
     info("Initialized system");
 }
@@ -965,6 +1205,9 @@ void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
     //Process tree needs this initialized, even though it is part of the memory hierarchy
     zinfo->lineSize = config.get<uint32_t>("sys.lineSize", 64);
     assert(zinfo->lineSize > 0);
+
+    zinfo->pageSize = config.get<uint32_t>("sys.pageSize", 4096);
+    assert(zinfo->pageSize > 0);
 
     //Port virtualization
     for (uint32_t i = 0; i < MAX_PORT_DOMAINS; i++) zinfo->portVirt[i] = new PortVirtualizer();

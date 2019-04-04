@@ -30,6 +30,7 @@
 #include "bithacks.h"
 #include "decoder.h"
 #include "filter_cache.h"
+#include "filter_tlb.h"
 #include "zsim.h"
 
 /* Uncomment to induce backpressure to the IW when the load/store buffers fill up. In theory, more detailed,
@@ -51,11 +52,13 @@
 #define DISPATCH_STAGE 13  // RAT + ROB + RS, each is easily 2 cycles
 
 #define L1D_LAT 4  // fixed, and FilterCache does not include L1 delay
+#define L1DTLB_LAT 0  // fixed, L1DTLB_LAT is zero because dcache tag and tlb are looked up in parallel
 #define FETCH_BYTES_PER_CYCLE 16
 #define ISSUES_PER_CYCLE 4
 #define RF_READS_PER_CYCLE 3
 
-OOOCore::OOOCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name) : Core(_name), l1i(_l1i), l1d(_l1d), cRec(0, _name) {
+OOOCore::OOOCore(FilterCache* _l1i, FilterCache* _l1d, FilterTLB* _l1dtlb, g_string& _name) : Core(_name), l1i(_l1i), l1d(_l1d), l1dtlb(_l1dtlb), cRec(0, _name) {
+//OOOCore::OOOCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name) : Core(_name), l1i(_l1i), l1d(_l1d), cRec(0, _name) {
     decodeCycle = DECODE_STAGE;  // allow subtracting from it
     curCycle = 0;
     phaseEndCycle = zinfo->phaseLength;
@@ -267,6 +270,15 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
 
                     Address addr = loadAddrs[loadIdx++];
                     uint64_t reqSatisfiedCycle = dispatchCycle;
+
+                    // Address Translation
+                    if ((addr != ((Address)-1L)) && (l1dtlb != nullptr)) {
+                        reqSatisfiedCycle = l1dtlb->lookup(addr, dispatchCycle) + L1DTLB_LAT;
+                        cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
+                    }
+                    dispatchCycle = reqSatisfiedCycle;
+
+                    // DCache Access
                     if (addr != ((Address)-1L)) {
                         reqSatisfiedCycle = l1d->load(addr, dispatchCycle) + L1D_LAT;
                         cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
@@ -305,7 +317,18 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
                     dispatchCycle = MAX(lastStoreAddrCommitCycle+1, dispatchCycle);
 
                     Address addr = storeAddrs[storeIdx++];
-                    uint64_t reqSatisfiedCycle = l1d->store(addr, dispatchCycle) + L1D_LAT;
+
+                    uint64_t reqSatisfiedCycle = dispatchCycle;
+
+                    // Address Translation
+                    if (l1dtlb != nullptr) {
+                        uint64_t reqSatisfiedCycle = l1dtlb->lookup(addr, dispatchCycle) + L1DTLB_LAT;
+                        cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
+                    }
+                    dispatchCycle = reqSatisfiedCycle;
+
+                    // DCache access
+                    reqSatisfiedCycle = l1d->store(addr, dispatchCycle) + L1D_LAT;
                     cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
 
                     // Fill the forwarding table

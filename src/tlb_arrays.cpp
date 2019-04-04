@@ -26,15 +26,16 @@
 #include "tlb_arrays.h"
 #include "hash.h"
 #include "repl_policies.h"
+#include "galloc.h"
 
 /* Set-associative array implementation */
 
-//SetAssocTLBArray::SetAssocTLBArray(uint32_t _numEntries, uint32_t _assoc, TLBReplPolicy* _rp, HashFamily* _hf) : rp(_rp), hf(_hf), numEntries(_numEntries), assoc(_assoc)  {
-//    array = gm_calloc<Address>(numEntries);
-//    numSets = numEntries/assoc;
-//    setMask = numSets - 1;
-//    assert_msg(isPow2(numSets), "must have a power of 2 # sets, but you specified %d", numSets);
-//}
+SetAssocTLBArray::SetAssocTLBArray(uint32_t _numEntries, uint32_t _assoc, TLBReplPolicy* _rp, HashFamily* _hf) : rp(_rp), hf(_hf), numEntries(_numEntries), assoc(_assoc)  {
+    array = gm_calloc<Address>(numEntries);
+    numSets = numEntries/assoc;
+    setMask = numSets - 1;
+    assert_msg(isPow2(numSets), "must have a power of 2 # sets, but you specified %d", numSets);
+}
 
 int32_t SetAssocTLBArray::lookup(const Address pageAddr, const TransReq* req, bool updateReplacement) {
     uint32_t set = hf->hash(0, pageAddr) & setMask;
@@ -52,7 +53,7 @@ uint32_t SetAssocTLBArray::insert(const Address pageAddr, const TransReq* req, A
     uint32_t set = hf->hash(0, pageAddr) & setMask;
     uint32_t first = set*assoc;
 
-    uint32_t candidate = rp->rankCands(req, SetAssocCands(first, first+assoc));
+    uint32_t candidate = rp->rankCands(req, SetAssocTLBCands(first, first+assoc));
 
     *victimPageAddr = array[candidate];
 
@@ -75,7 +76,7 @@ uint32_t SetAssocTLBArray::invalidPTE(const Address pageAddr) {
     return -1;
 }
 
-void SetAssocTLBArray::invalidAll(const Address pageAddr) {
+void SetAssocTLBArray::invalidAll(void) {
     for (uint32_t id = 0; id < numEntries; id++) {
         rp->replaced(id);
     }
