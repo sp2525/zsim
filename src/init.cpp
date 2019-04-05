@@ -31,6 +31,7 @@
 #include <string>
 #include <sys/time.h>
 #include <vector>
+#include "ptw.h"
 #include "tlb.h"
 #include "tlb_arrays.h"
 #include "filter_tlb.h"
@@ -80,6 +81,71 @@
 
 extern void EndOfPhaseActions(); //in zsim.cpp
 
+BasePTW* BuildPTW(Config& config, const string& prefix, g_string& name) {
+    string type = config.get<const char*>(prefix + "type", "Simple");
+
+    uint32_t pageSize = zinfo->pageSize;
+    assert(pageSize > 0); //avoid config deps
+
+
+    //ptwCache
+    PTWCache* ptwCache = nullptr;
+
+    bool usePTWCache = config.get<bool>(prefix + "usePTWCache", false);
+
+    if (!usePTWCache) {
+        string ptwCacheType = config.get<const char*>(prefix + "ptwCache.type", "SetAssoc");
+        uint32_t numEntries = config.get<uint32_t>(prefix + "ptwCache.entries", 64);
+        uint32_t ways = config.get<uint32_t>(prefix + "ptwCache.ways", 2);
+        assert(numEntries % ways == 0); 
+        //uint32_t candidates = ways;
+
+        // build the ptwCache
+        if (ptwCacheType == "SetAssoc") {
+            ptwCache = new SetAssocPTWCache(numEntries, ways);
+        } else {
+            panic("%s: Invalid ptwCache type %s", name.c_str(), ptwCacheType.c_str());
+        }
+    }
+
+    bool realMemAccess = config.get<bool>(prefix + "realMemAccess", false);
+    //Latency
+    uint32_t latency = config.get<uint32_t>(prefix + "latency", 30);
+    uint32_t invLatency = config.get<uint32_t>(prefix + "invLatency", 5);
+    uint32_t accLat = latency; //This includes memory access latency
+    uint32_t invLat = invLatency;
+
+    // Finally, build the ptw
+    PTW* ptw;
+    if (type == "Simple") {
+        ptw = new PTW(ptwCache, realMemAccess, accLat, invLat, name);
+    } else {
+        panic("Invalid cache type %s", type.c_str());
+    }
+
+    return ptw;
+}
+
+typedef vector<BasePTW*> PTWGroup;
+
+PTWGroup* BuildPTWGroup(Config& config, const string& name) {
+    PTWGroup* pgp = new PTWGroup;
+    PTWGroup& pg = *pgp;
+
+    string prefix = "sys.ptws." + name + ".";
+
+    uint32_t ptws = config.get<uint32_t>(prefix + "ptws", 1);
+
+    pg.resize(ptws);
+
+    for (uint32_t i = 0; i < ptws; i++) {
+        stringstream ss;
+        ss << name << "-" << i;
+        g_string PTWName(ss.str().c_str());
+        pg[i] = BuildPTW(config, prefix, PTWName);
+    }
+    return pgp;
+}
 
 BaseTLB* BuildTLB(Config& config, const string& prefix, g_string& name, bool isTerminal) {
     string type = config.get<const char*>(prefix + "type", "Simple");
@@ -193,6 +259,7 @@ BaseTLB* BuildTLB(Config& config, const string& prefix, g_string& name, bool isT
     return tlb;
 }
 
+typedef vector<TransObject*> TransObjectGroup;
 typedef vector<BaseTLB*> TLBGroup;
 
 TLBGroup* BuildTLBGroup(Config& config, const string& name, bool isTerminal) {
@@ -576,74 +643,6 @@ static void InitSystem(Config& config) {
 
     string prefix;
 
-    
-    // Build the tlbs
-    vector<const char*> tlbGroupNames;
-    config.subgroups("sys.tlbs", tlbGroupNames);
-    prefix = "sys.tlbs.";
-    unordered_map<string, string> tlbParentMap; //child -> parent
-    vector<string> parentNames;
-    unordered_map<string, TLBGroup*> tlbMap;
-
-    // set tlbParentMap
-    auto it = parentNames.begin();
-    for (const char* grp : tlbGroupNames) {
-        string group(grp);
-        string parent = config.get<const char*>(prefix + group + ".parent", "");
-        if ((parent != "") && (std::find(parentNames.begin(), parentNames.end(), parent) == parentNames.end())) {
-            it = parentNames.insert(it, parent);
-        }
-        tlbParentMap[group] = parent;
-        info("set tlbParentMap: child \"%s\" => parent \"%s\"", group.c_str(), parent.c_str());
-    }
-
-    // build TLBgroups
-    for (const char* grp : tlbGroupNames) {
-        string group(grp);
-        bool isTerminal = (std::find(parentNames.begin(), parentNames.end(), group) == parentNames.end());
-        tlbMap[group] = BuildTLBGroup(config, group, isTerminal);
-    }
-    info("build TLB groups");
-
-    // Check that parents are valid (another tlb or ptw)
-    for (auto& it : tlbParentMap) {
-        if (it.second != "") {
-            bool found = false;
-            for (auto& grp : tlbGroupNames) found |= it.second == grp;
-            //for (auto& grp : ptwGroupNames) found |= it.second == grp;
-            if (!found) panic("%s has invalid parent %s", it.first.c_str(), it.second.c_str());
-        }
-    }
-
-    // set parents of tlbs
-    for (const char* grp : tlbGroupNames) {
-
-        TLBGroup& childTLBGroup = *tlbMap[grp];
-        uint32_t children = childTLBGroup.size();
-        assert(children);
-
-        if (tlbParentMap[grp] == "")
-          continue;
-
-        TLBGroup& parentTLBGroup = *tlbMap[tlbParentMap[grp]];
-
-        uint32_t parents = parentTLBGroup.size();
-        assert(parents);
-
-        assert(children == parents);
-
-        for (uint32_t i = 0; i < children; i++) {
-            BaseTLB* parentTLB = parentTLBGroup[i];
-            childTLBGroup[i]->setParent(parentTLB);
-            //if (printHierarchy) {
-            if (true) {
-              string childName = childTLBGroup[i]->getName();
-              string parentName = parentTLBGroup[i]->getName();
-              info("Hierarchy: %s -> %s", childName.c_str(), parentName.c_str());
-            }
-        }
-    }
-    info("finished setting parents of tlbs");
 
     // Build the caches
     vector<const char*> cacheGroupNames;
@@ -811,7 +810,143 @@ static void InitSystem(Config& config) {
         }
     }
 
-//    //Tracks how many tlbs have been allocated to cores
+    // Build the ptws
+    vector<const char*> ptwGroupNames;
+    config.subgroups("sys.ptws", ptwGroupNames);
+    prefix = "sys.ptws.";
+    unordered_map<string, PTWGroup*> ptwMap;
+
+    // build PTWgroups
+    for (const char* grp : ptwGroupNames) {
+        string group(grp);
+        ptwMap[group] = BuildPTWGroup(config, group);
+    }
+    info("build PTW groups");
+
+    // set parents of ptws
+    for (const char* grp : ptwGroupNames) {
+        string group(grp);
+        string parentMem = config.get<const char*>(prefix + group + ".parentMem", "");
+
+        PTWGroup& childPTWGroup = *ptwMap[group];
+        uint32_t children = childPTWGroup.size();
+        assert(children);
+
+        CacheGroup& parentCacheGroup = *cMap[parentMem];
+        uint32_t parents = parentCacheGroup.size();
+        assert(parents);
+
+        assert(children == parents);
+
+        for (uint32_t i = 0; i < children; i++) {
+            assert(parentCacheGroup[i].size() == 1); //Terminal cache's bank should be 1
+            BaseCache* parentCache = parentCacheGroup[i][0];
+            childPTWGroup[i]->setParentMem(parentCache);
+            //if (printHierarchy) {
+            if (true) {
+              string childName = childPTWGroup[i]->getName();
+              string parentName = parentCache->getName();
+              info("Hierarchy: %s -> %s", childName.c_str(), parentName.c_str());
+            }
+        }
+    }
+    info("finished setting parents of ptws");
+
+    // Build the tlbs
+    vector<const char*> tlbGroupNames;
+    config.subgroups("sys.tlbs", tlbGroupNames);
+    prefix = "sys.tlbs.";
+    unordered_map<string, string> tlbParentMap; //child -> parent
+    vector<string> parentNames;
+    unordered_map<string, TLBGroup*> tlbMap;
+
+    // set tlbParentMap
+    auto it = parentNames.begin();
+    for (const char* grp : tlbGroupNames) {
+        string group(grp);
+        string parent = config.get<const char*>(prefix + group + ".parent", "");
+        if ((parent != "") && (std::find(parentNames.begin(), parentNames.end(), parent) == parentNames.end())) {
+            it = parentNames.insert(it, parent);
+        }
+        tlbParentMap[group] = parent;
+        info("set tlbParentMap: child \"%s\" => parent \"%s\"", group.c_str(), parent.c_str());
+    }
+
+    // build TLBgroups
+    for (const char* grp : tlbGroupNames) {
+        string group(grp);
+        bool isTerminal = (std::find(parentNames.begin(), parentNames.end(), group) == parentNames.end());
+        tlbMap[group] = BuildTLBGroup(config, group, isTerminal);
+    }
+    info("build TLB groups");
+
+    // Check that parents are valid (another tlb or ptw)
+    for (auto& it : tlbParentMap) {
+        if (it.second != "") {
+            bool found = false;
+            for (auto& grp : tlbGroupNames) found |= it.second == grp;
+            for (auto& grp : ptwGroupNames) found |= it.second == grp;
+            if (!found) panic("%s has invalid parent %s", it.first.c_str(), it.second.c_str());
+        }
+    }
+
+    // set parents of tlbs
+    for (const char* grp : tlbGroupNames) {
+        string group(grp);
+        TLBGroup& childTLBGroup = *tlbMap[group];
+        uint32_t children = childTLBGroup.size();
+        assert(children);
+
+        if (tlbParentMap[group] == "")
+          continue;
+
+        bool isParentTLB;
+        uint32_t parents;
+
+        string parentGroup = tlbParentMap[group];
+
+        TLBGroup* parentTLBGroup = nullptr;
+        PTWGroup* parentPTWGroup = nullptr;
+        //TLBGroup& parentTLBGroup = *tlbMap[parentGroup];
+        //PTWGroup& parentPTWGroup = *ptwMap[parentGroup];
+
+        if (tlbMap.end() != tlbMap.find(parentGroup)) {
+            isParentTLB = true;
+            parentTLBGroup = tlbMap[parentGroup];
+            parents = parentTLBGroup->size();
+        }
+        else if (ptwMap.end() != ptwMap.find(parentGroup)) {
+            isParentTLB = false;
+            parentPTWGroup = ptwMap[parentGroup];
+            parents = parentPTWGroup->size();
+        }
+        else {
+            panic("%s has invalid parent %s", group.c_str(), parentGroup.c_str());
+        }
+        assert(parents);
+        assert(children == parents);
+
+        for (uint32_t i = 0; i < children; i++) {
+            TransObject* parentTransObject = nullptr;
+            if (isParentTLB) {
+                parentTransObject = (*parentTLBGroup)[i];
+            }
+            else {
+                parentTransObject = (*parentPTWGroup)[i];
+            }
+            childTLBGroup[i]->setParent(parentTransObject);
+            //if (printHierarchy) {
+            if (true) {
+              string childName = childTLBGroup[i]->getName();
+              string parentName = parentTransObject->getName();
+              info("Hierarchy: %s -> %s", childName.c_str(), parentName.c_str());
+            }
+        }
+    }
+    info("finished setting parents of tlbs");
+
+
+    //Tracks how many tlbs have been allocated to cores
     unordered_map<string, uint32_t> assignedTLBs;
     for (const char* grp : tlbGroupNames) assignedTLBs[grp] = 0;
 
@@ -856,14 +991,14 @@ static void InitSystem(Config& config) {
             }
 
             if (type != "Null") {
-                //string itlb = config.get<const char*>(prefix + "itlb");
-                string dtlb = config.get<const char*>(prefix + "dtlb");
+                //string itlb = config.get<const char*>(prefix + "itlb", "");
+                string dtlb = config.get<const char*>(prefix + "dtlb", "");
 
                 string icache = config.get<const char*>(prefix + "icache");
                 string dcache = config.get<const char*>(prefix + "dcache");
 
-                //if (!assignedTLBs.count(itlb)) panic("%s: Invalid itlb parameter %s", group, itlb.c_str());
-                if (!assignedTLBs.count(dtlb)) panic("%s: Invalid dtlb parameter %s", group, dtlb.c_str());
+                //if ((!assignedTLBs.count(itlb)) && (itlb != "")) panic("%s: Invalid itlb parameter %s", group, itlb.c_str());
+                if ((!assignedTLBs.count(dtlb)) && (dtlb != "")) panic("%s: Invalid dtlb parameter %s", group, dtlb.c_str());
                 if (!assignedCaches.count(icache)) panic("%s: Invalid icache parameter %s", group, icache.c_str());
                 if (!assignedCaches.count(dcache)) panic("%s: Invalid dcache parameter %s", group, dcache.c_str());
 
@@ -874,19 +1009,24 @@ static void InitSystem(Config& config) {
                     Core* core;
 
                     //Get the tlbs
-                    //TLBGroup& itlbgroup = *tlbMap[itlb];
-                    TLBGroup& dtlbgroup = *tlbMap[dtlb];
 
-                    //assert(cores == itlbgroup.size());
-                    assert(cores == dtlbgroup.size());
+                    FilterTLB* it = nullptr;
+                    //if (itlb != "") {
+                    //    TLBGroup& itlbgroup = *tlbMap[itlb];
+                    //    assert(cores == itlbgroup.size());
+                    //    it = dynamic_cast<FilterTLB*>(itlbgroup[coreIdx]);
+                    //    assert(itlb);
+                    //    itlb->setSourceId(coreIdx);
+                    //}
 
-                    //FilterTLB* itlb = dynamic_cast<FilterTLB*>(itlbgroup[coreIdx]);
-                    //assert(itlb);
-                    //itlb->setSourceId(coreIdx);
-
-                    FilterTLB* dt = dynamic_cast<FilterTLB*>(dtlbgroup[coreIdx]);
-                    assert(dt);
-                    dt->setSourceId(coreIdx);
+                    FilterTLB* dt = nullptr;
+                    if (dtlb != "") {
+                        TLBGroup& dtlbgroup = *tlbMap[dtlb];
+                        assert(cores == dtlbgroup.size());
+                        dt = dynamic_cast<FilterTLB*>(dtlbgroup[coreIdx]);
+                        assert(dt);
+                        dt->setSourceId(coreIdx);
+                    }
 
                     //Get the caches
                     CacheGroup& igroup = *cMap[icache];

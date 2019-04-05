@@ -23,54 +23,64 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef TLB_H_
-#define TLB_H_
+#ifndef PTW_H_
+#define PTW_H_
 
-#include "tlb_arrays.h"
 #include "g_std/g_string.h"
 #include "g_std/g_vector.h"
 #include "translation_hierarchy.h"
 #include "repl_policies.h"
 #include "stats.h"
 
-/* General coherent modular cache. The replacement policy and cache array are
- * pretty much mix and match. The coherence controller interfaces are general
- * too, but to avoid virtual function call overheads we work with MESI
- * controllers, since for now we only have MESI controllers
- */
-class TLB : public BaseTLB {
+class PTWCache : public GlobAlloc {
+};
+
+class SetAssocPTWCache : public PTWCache {
+  protected:
+      uint32_t numEntries;
+      uint32_t numSets;
+      uint32_t assoc;
+      uint32_t setMask;
+  public:
+      SetAssocPTWCache(uint32_t _numEntries, uint32_t _assoc) : 
+        numEntries(_numEntries), assoc(_assoc) {
+          numSets = numEntries/assoc;
+          setMask = numSets - 1;
+          assert_msg(isPow2(numSets), "must have a power of 2 # sets, but you specified %d", numSets);
+        }
+};
+
+class PTW : public BasePTW {
     protected:
-        TransObject* parent;
-        TLBArray* array;
-        TLBReplPolicy* rp;
+        MemObject* parentMem;
+        PTWCache* ptwCache;
 
-        uint32_t numEntries;
-
+        bool realMemAccess;
         //Latencies
-        uint32_t accLat; //latency of a normal access (could split in get/put, probably not needed)
+        uint32_t accLat; //latency of a normal request
         uint32_t invLat; //latency of an invalidation
 
         //Profiling counters
-        Counter profLKUPHit, profLKUPMiss;
-        Counter profINVPTE, profINVALL;
-        Counter profLKUPNextLevelLat;
-        Counter profINVNextLevelLat;
+        Counter profREQ;
+        Counter profINVPTE;
+        Counter profINVALL;
+        Counter profMemAccess;
+        Counter profMemAccessLat;
 
         //bool inclusive;
 
         PAD();
-        lock_t tlbLock;
+        lock_t ptwLock;
         PAD();
 
-        uint32_t level;
         g_string name;
 
     public:
-        TLB(uint32_t _numEntries, TransObject* _parent, TLBArray* _array, TLBReplPolicy* _rp, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
-        TLB(uint32_t _numEntries, TLBArray* _array, TLBReplPolicy* _rp, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
+        PTW(MemObject* _parentMem, PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
+        PTW(PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
 
         const char* getName();
-        void setParent(TransObject* parent);
+        void setParentMem(MemObject* _parentMem);
         void initStats(AggregateStat* parentStat);
 
         uint64_t access(const TransReq& req);
@@ -78,15 +88,15 @@ class TLB : public BaseTLB {
         uint64_t invalidate(const TransInvReq& req);
 
         inline void lock() {
-            futex_lock(&tlbLock);
+            futex_lock(&ptwLock);
         }
 
         inline void unlock() {
-            futex_unlock(&tlbLock);
+            futex_unlock(&ptwLock);
         }
 
     protected:
-        void initTLBStats(AggregateStat* TLBStat);
+        void initPTWStats(AggregateStat* ptwStat);
 };
 
-#endif  // TLB_H_
+#endif  // PTW_H_

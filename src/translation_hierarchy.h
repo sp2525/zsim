@@ -105,6 +105,6 @@ class BaseTLB : public TransObject {
 /* Base class for all ptw objects */
 class BasePTW : public TransObject {
     public:
-        virtual void setMemParent(MemObject* memParent) = 0;
+        virtual void setParentMem(MemObject* parentMem) = 0;
 };
 #endif  // TRANSLATION_HIERARCHY_H_

@@ -23,62 +23,73 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "tlb.h"
+#include "ptw.h"
 #include "hash.h"
 
 #include "event_recorder.h"
 #include "timing_event.h"
 #include "zsim.h"
 
-TLB::TLB(uint32_t _numEntries, TransObject* _parent, TLBArray* _array, TLBReplPolicy* _rp, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
-    : parent(_parent), array(_array), rp(_rp), numEntries(_numEntries), accLat(_accLat), invLat(_invLat), name(_name) {
-        futex_init(&tlbLock);
+PTW::PTW(MemObject* _parentMem, PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
+    : parentMem(_parentMem), ptwCache(_ptwCache), realMemAccess(_realMemAccess), accLat(_accLat), invLat(_invLat), name(_name) {
+        futex_init(&ptwLock);
     }
 
-TLB::TLB(uint32_t _numEntries, TLBArray* _array, TLBReplPolicy* _rp, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
-    : array(_array), rp(_rp), numEntries(_numEntries), accLat(_accLat), invLat(_invLat), name(_name) {
-        futex_init(&tlbLock);
+PTW::PTW(PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
+    : ptwCache(_ptwCache), realMemAccess(_realMemAccess), accLat(_accLat), invLat(_invLat), name(_name) {
+        futex_init(&ptwLock);
     }
 
-const char* TLB::getName() {
+const char* PTW::getName() {
     return name.c_str();
 }
 
-void TLB::setParent(TransObject* _parent) {
-    parent = _parent;
+void PTW::setParentMem(MemObject* _parentMem){
+    parentMem = _parentMem;
 }
 
-void TLB::initStats(AggregateStat* parentStat) {
-    AggregateStat* tlbStat = new AggregateStat();
-    tlbStat->init(name.c_str(), "tlb stats");
-    initTLBStats(tlbStat);
-    parentStat->append(tlbStat);
+void PTW::initStats(AggregateStat* parentStat) {
+    AggregateStat* ptwStat = new AggregateStat();
+    ptwStat->init(name.c_str(), "ptw stats");
+    initPTWStats(ptwStat);
+    parentStat->append(ptwStat);
 }
 
-void TLB::initTLBStats(AggregateStat* tlbStat) {
-    profLKUPHit.init("hLKUP", "LKUP hits");
-    profLKUPMiss.init("mLKUP", "LKUP misses");
+void PTW::initPTWStats(AggregateStat* ptwStat) {
+    profREQ.init("REQ", "Requests");
     profINVPTE.init("INVPTE", "Invalidate pte");
     profINVALL.init("INVALL", "Invalidate all");
-    profLKUPNextLevelLat.init("latLKUPnl", "LKUP latency on next level");
-    profINVNextLevelLat.init("latINVnl", "invalidate latency on next level");
+    profMemAccess.init("MemAccess", "Memory Access");
+    profMemAccessLat.init("MemAccessLat", "Memory access latency");
 
-    tlbStat->append(&profLKUPHit);
-    tlbStat->append(&profLKUPMiss);
-    tlbStat->append(&profINVPTE);
-    tlbStat->append(&profINVALL);
-    tlbStat->append(&profLKUPNextLevelLat);
-    tlbStat->append(&profINVNextLevelLat);
-    array->initStats(tlbStat);
-    rp->initStats(tlbStat);
+    ptwStat->append(&profREQ);
+    ptwStat->append(&profINVPTE);
+    ptwStat->append(&profINVALL);
+    ptwStat->append(&profMemAccess);
+    ptwStat->append(&profMemAccessLat);
+    //ptwCache->initStats(ptwStat);
 }
 
-uint64_t TLB::access(const TransReq& req) {
+uint64_t PTW::access(const TransReq& req) {
     uint64_t respCycle = req.cycle;
     bool updateReplacement = true;
 
+
     lock();
-    int32_t wayIdx = array->lookup(req.pageAddr, &req, updateReplacement);
+    profREQ.inc();
+
+    if (!realMemAccess) {
+        uint32_t memAccess = 3;
+        assert(accLat > 10);
+        uint32_t memAccessLat = accLat - 10;
+        profMemAccess.inc(memAccess);
+        profMemAccessLat.inc(memAccessLat);
+        respCycle += accLat;
+    }
+//    else {
+//    }
+/*
+    int32_t wayIdx = ptwCache->lookup(req.pageAddr, &req, updateReplacement);
     respCycle += accLat;
 
     if (wayIdx == -1) {
@@ -95,6 +106,7 @@ uint64_t TLB::access(const TransReq& req) {
     else {
         profLKUPHit.inc();
     }
+*/
     unlock();
 
     assert_msg(respCycle >= req.cycle, "[%s] resp < req? 0x%lx, respCycle %ld reqCycle %ld",
@@ -102,27 +114,19 @@ uint64_t TLB::access(const TransReq& req) {
     return respCycle;
 }
 
-uint64_t TLB::invalidate(const TransInvReq& req) {
+uint64_t PTW::invalidate(const TransInvReq& req) {
     uint64_t respCycle = req.cycle;
     respCycle += invLat;
 
     lock();
     if (req.type == INVPTE) {
       profINVPTE.inc();
-      array->invalidPTE(req.pageAddr);
+      //ptwCache->invalidPTE(req.pageAddr);
     }
     else if(req.type == INVALL) {
       profINVALL.inc();
-      array->invalidAll();
+      //ptwCache->invalidAll();
     } 
-
-    if (req.level > level) {
-        if (parent != nullptr) {
-          uint32_t nextLevelLat = parent->invalidate(req) - respCycle;
-          profINVNextLevelLat.inc(nextLevelLat);
-          respCycle += nextLevelLat;
-        }
-    }
     unlock();
 
     return respCycle;
