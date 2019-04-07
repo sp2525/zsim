@@ -29,33 +29,34 @@
 #include "g_std/g_string.h"
 #include "g_std/g_vector.h"
 #include "translation_hierarchy.h"
+#include "memory_hierarchy.h"
 #include "repl_policies.h"
 #include "stats.h"
+#include "hash.h"
+#include "ptw_cache.h"
 
-class PTWCache : public GlobAlloc {
-};
-
-class SetAssocPTWCache : public PTWCache {
-  protected:
-      uint32_t numEntries;
-      uint32_t numSets;
-      uint32_t assoc;
-      uint32_t setMask;
-  public:
-      SetAssocPTWCache(uint32_t _numEntries, uint32_t _assoc) : 
-        numEntries(_numEntries), assoc(_assoc) {
-          numSets = numEntries/assoc;
-          setMask = numSets - 1;
-          assert_msg(isPow2(numSets), "must have a power of 2 # sets, but you specified %d", numSets);
-        }
-};
+//#define LEVEL0_IDX_BITS   9
+//#define LEVEL1_IDX_BITS   9
+//#define LEVEL2_IDX_BITS   9
+//#define LEVEL3_IDX_BITS   9
+//#define LEVEL0_IDX_MASK   (0x1ff << 39)
+//#define LEVEL1_IDX_MASK   (0x1ff << 30)
+//#define LEVEL2_IDX_MASK   (0x1ff << 21)
+//#define LEVEL3_IDX_MASK   (0x1ff << 12)
 
 class PTW : public BasePTW {
     protected:
         MemObject* parentMem;
         PTWCache* ptwCache;
+        HashFamily* hf; //to make address of page table
+
+        uint32_t pageSize;
+        uint32_t transLevel;
 
         bool realMemAccess;
+       
+        uint64_t BaseAddr; 
+
         //Latencies
         uint32_t accLat; //latency of a normal request
         uint32_t invLat; //latency of an invalidation
@@ -76,8 +77,8 @@ class PTW : public BasePTW {
         g_string name;
 
     public:
-        PTW(MemObject* _parentMem, PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
-        PTW(PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
+        PTW(MemObject* _parentMem, PTWCache* _ptwCache, uint32_t _pageSize, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
+        PTW(PTWCache* _ptwCache, uint32_t _pageSize, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name);
 
         const char* getName();
         void setParentMem(MemObject* _parentMem);
@@ -96,6 +97,7 @@ class PTW : public BasePTW {
         }
 
     protected:
+        void init(void);
         void initPTWStats(AggregateStat* ptwStat);
 };
 

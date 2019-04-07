@@ -275,6 +275,7 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
                     if ((addr != ((Address)-1L)) && (l1dtlb != nullptr)) {
                         reqSatisfiedCycle = l1dtlb->lookup(addr, dispatchCycle) + L1DTLB_LAT;
                         cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
+                        //info("tlb lookup in ooo_core, %d, %d, %d", curCycle, dispatchCycle, reqSatisfiedCycle);
                     }
                     dispatchCycle = reqSatisfiedCycle;
 
@@ -282,6 +283,7 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
                     if (addr != ((Address)-1L)) {
                         reqSatisfiedCycle = l1d->load(addr, dispatchCycle) + L1D_LAT;
                         cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
+                        //info("dcache access in ooo_core, %d, %d, %d", curCycle, dispatchCycle, reqSatisfiedCycle);
                     }
 
                     // Enforce st-ld forwarding
@@ -324,12 +326,14 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
                     if (l1dtlb != nullptr) {
                         uint64_t reqSatisfiedCycle = l1dtlb->lookup(addr, dispatchCycle) + L1DTLB_LAT;
                         cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
+                        //info("tlb lookup in ooo_core, %d, %d, %d", curCycle, dispatchCycle, reqSatisfiedCycle);
                     }
                     dispatchCycle = reqSatisfiedCycle;
 
                     // DCache access
                     reqSatisfiedCycle = l1d->store(addr, dispatchCycle) + L1D_LAT;
                     cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
+                    //info("dcache access in ooo_core, %d, %d, %d", curCycle, dispatchCycle, reqSatisfiedCycle);
 
                     // Fill the forwarding table
                     fwdArray[(addr>>2) & (FWD_ENTRIES-1)].set(addr, reqSatisfiedCycle);

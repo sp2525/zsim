@@ -30,15 +30,29 @@
 #include "timing_event.h"
 #include "zsim.h"
 
-PTW::PTW(MemObject* _parentMem, PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
-    : parentMem(_parentMem), ptwCache(_ptwCache), realMemAccess(_realMemAccess), accLat(_accLat), invLat(_invLat), name(_name) {
-        futex_init(&ptwLock);
+#define BASE_ADDR ((uint64_t)0xAAAA) << 32
+#define WALK_LAT  1
+
+PTW::PTW(MemObject* _parentMem, PTWCache* _ptwCache, uint32_t _pageSize, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
+    : parentMem(_parentMem), ptwCache(_ptwCache), pageSize(_pageSize), realMemAccess(_realMemAccess), accLat(_accLat), invLat(_invLat), name(_name) {
+      init();
     }
 
-PTW::PTW(PTWCache* _ptwCache, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
-    : ptwCache(_ptwCache), realMemAccess(_realMemAccess), accLat(_accLat), invLat(_invLat), name(_name) {
-        futex_init(&ptwLock);
+PTW::PTW(PTWCache* _ptwCache, uint32_t _pageSize, bool _realMemAccess, uint32_t _accLat, uint32_t _invLat, const g_string& _name)
+    : ptwCache(_ptwCache), pageSize(_pageSize), realMemAccess(_realMemAccess), accLat(_accLat), invLat(_invLat), name(_name) {
+      init();
     }
+
+void PTW::init(void) {
+        futex_init(&ptwLock);
+        BaseAddr = BASE_ADDR;
+        transLevel = (pageSize == 4096) ? 4 :
+                     (pageSize == 2097152) ? 3 : 0;
+        assert(transLevel >= 3);
+        if (realMemAccess) {
+          hf = new SHA1HashFamily(1);
+        }
+}
 
 const char* PTW::getName() {
     return name.c_str();
@@ -86,27 +100,30 @@ uint64_t PTW::access(const TransReq& req) {
         profMemAccessLat.inc(memAccessLat);
         respCycle += accLat;
     }
-//    else {
-//    }
-/*
-    int32_t wayIdx = ptwCache->lookup(req.pageAddr, &req, updateReplacement);
-    respCycle += accLat;
-
-    if (wayIdx == -1) {
-        profLKUPMiss.inc();
-        if (parent != nullptr) {
-          uint32_t nextLevelLat = parent->access(req) - respCycle;
-          profLKUPNextLevelLat.inc(nextLevelLat);
-          respCycle += nextLevelLat;
-        }
-        Address victimPageAddr;
-        wayIdx = array->insert(req.pageAddr, &req, &victimPageAddr);
-        //trace(TLB, "[%s] Evicting 0x%lx", name.c_str(), victimPageAddr);
-    }
     else {
-        profLKUPHit.inc();
+      //info("ptw %s access Addr = %lx", name.c_str(), req.pageAddr);
+      MESIState dummyState = MESIState::I;
+      MemReq memReq = {0x0, GETS, 0, &dummyState, respCycle, &ptwLock, dummyState, req.srcId, MemReq::PTWFETCH};
+      uint64_t tableAddr = BaseAddr;
+
+      for(uint32_t l = 1; l <= transLevel; l++) {
+          uint32_t idx = (req.pageAddr >> (9 * (transLevel - l))) & 0x1ff;
+          uint64_t pteAddr = tableAddr + idx;
+          memReq.lineAddr = procMask | (pteAddr >> lineBits);
+          memReq.cycle = respCycle;
+          //info("level %d mem access addr: 0x%lx, cycle = %d, idx = 0x%x, pteAddr = 0x%lx, pageAddr = 0x%lx", l, memReq.lineAddr, memReq.cycle, idx, pteAddr, req.pageAddr);
+          uint64_t memAccessLat = parentMem->access(memReq) - respCycle;
+          if(zinfo->eventRecorders[req.srcId])
+            zinfo->eventRecorders[req.srcId]->popRecord();
+          profMemAccess.inc();
+          profMemAccessLat.inc(memAccessLat);
+          respCycle += memAccessLat;
+          respCycle += WALK_LAT;
+          if (l != transLevel)
+            tableAddr = hf->hash(0, pteAddr);
+      }
+      
     }
-*/
     unlock();
 
     assert_msg(respCycle >= req.cycle, "[%s] resp < req? 0x%lx, respCycle %ld reqCycle %ld",

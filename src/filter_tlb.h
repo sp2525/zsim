@@ -111,6 +111,7 @@ class FilterTLB : public TLB {
         }
 
         inline uint64_t lookup(Address vAddr, uint64_t curCycle) {
+            //info("filter_tlb %s lookup Addr = %lx", name.c_str(), vAddr);
             Address vPageAddr = vAddr >> pageBits;
             uint32_t idx = vPageAddr & setMask;
             uint64_t availCycle = filterArray[idx].availCycle; //read before, careful with ordering to avoid timing races

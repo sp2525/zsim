@@ -85,8 +85,7 @@ BasePTW* BuildPTW(Config& config, const string& prefix, g_string& name) {
     string type = config.get<const char*>(prefix + "type", "Simple");
 
     uint32_t pageSize = zinfo->pageSize;
-    assert(pageSize > 0); //avoid config deps
-
+    assert((pageSize == 4096) || (pageSize == 2097152)); //4KB or 2MB
 
     //ptwCache
     PTWCache* ptwCache = nullptr;
@@ -118,7 +117,7 @@ BasePTW* BuildPTW(Config& config, const string& prefix, g_string& name) {
     // Finally, build the ptw
     PTW* ptw;
     if (type == "Simple") {
-        ptw = new PTW(ptwCache, realMemAccess, accLat, invLat, name);
+        ptw = new PTW(ptwCache, pageSize, realMemAccess, accLat, invLat, name);
     } else {
         panic("Invalid cache type %s", type.c_str());
     }
@@ -1130,6 +1129,14 @@ static void InitSystem(Config& config) {
         AggregateStat* groupStat = new AggregateStat(true);
         groupStat->init(gm_strdup(group), "TLB stats");
         for (BaseTLB* tlb : *tlbMap[group]) tlb->initStats(groupStat);
+        zinfo->rootStat->append(groupStat);
+    }
+
+    //Init stats: ptws
+    for (const char* group : ptwGroupNames) {
+        AggregateStat* groupStat = new AggregateStat(true);
+        groupStat->init(gm_strdup(group), "PTW stats");
+        for (BasePTW* ptw : *ptwMap[group]) ptw->initStats(groupStat);
         zinfo->rootStat->append(groupStat);
     }
 

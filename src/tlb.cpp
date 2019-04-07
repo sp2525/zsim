@@ -74,6 +74,7 @@ void TLB::initTLBStats(AggregateStat* tlbStat) {
 }
 
 uint64_t TLB::access(const TransReq& req) {
+    //info("tlb %s access Addr = %lx", name.c_str(), req.pageAddr);
     uint64_t respCycle = req.cycle;
     bool updateReplacement = true;
 
@@ -84,7 +85,8 @@ uint64_t TLB::access(const TransReq& req) {
     if (wayIdx == -1) {
         profLKUPMiss.inc();
         if (parent != nullptr) {
-          uint32_t nextLevelLat = parent->access(req) - respCycle;
+          TransReq newReq = {req.pageAddr, req.childId, respCycle, req.childLock, req.srcId, req.flags};
+          uint64_t nextLevelLat = parent->access(newReq) - respCycle;
           profLKUPNextLevelLat.inc(nextLevelLat);
           respCycle += nextLevelLat;
         }

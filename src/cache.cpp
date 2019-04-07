@@ -59,6 +59,7 @@ void Cache::initCacheStats(AggregateStat* cacheStat) {
 }
 
 uint64_t Cache::access(MemReq& req) {
+    //info("cache %s access Addr = %lx, cycle = %d", name.c_str(), req.lineAddr, req.cycle);
     uint64_t respCycle = req.cycle;
     bool skipAccess = cc->startAccess(req); //may need to skip access due to races (NOTE: may change req.type!)
     if (likely(!skipAccess)) {
