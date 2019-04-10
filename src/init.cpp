@@ -1076,9 +1076,6 @@ static void InitSystem(Config& config) {
                         assert(type == "OOO");
                         OOOCore* ocore = new (&oooCores[j]) OOOCore(ic, dc, dt, name);
                         //OOOCore* ocore = new (&oooCores[j]) OOOCore(ic, dc, name);
-                        info("p->core")
-                        p->core = ocore;
-                        info("p->core end")
                         zinfo->eventRecorders[coreIdx] = ocore->getEventRecorder();
                         zinfo->eventRecorders[coreIdx]->setSourceId(coreIdx);
                         core = ocore;
