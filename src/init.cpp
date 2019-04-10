@@ -822,6 +822,7 @@ static void InitSystem(Config& config) {
     }
     info("build PTW groups");
 
+    uint32_t tlbPtwId = 0;
     // set parents of ptws
     for (const char* grp : ptwGroupNames) {
         string group(grp);
@@ -841,6 +842,8 @@ static void InitSystem(Config& config) {
             assert(parentCacheGroup[i].size() == 1); //Terminal cache's bank should be 1
             BaseCache* parentCache = parentCacheGroup[i][0];
             childPTWGroup[i]->setParentMem(parentCache);
+            childPTWGroup[i]->setId(tlbPtwId);
+            tlbPtwId++;
             //if (printHierarchy) {
             if (true) {
               string childName = childPTWGroup[i]->getName();
@@ -934,6 +937,8 @@ static void InitSystem(Config& config) {
                 parentTransObject = (*parentPTWGroup)[i];
             }
             childTLBGroup[i]->setParent(parentTransObject);
+            childTLBGroup[i]->setId(tlbPtwId);
+            tlbPtwId++;
             //if (printHierarchy) {
             if (true) {
               string childName = childTLBGroup[i]->getName();
@@ -992,6 +997,7 @@ static void InitSystem(Config& config) {
             if (type != "Null") {
                 //string itlb = config.get<const char*>(prefix + "itlb", "");
                 string dtlb = config.get<const char*>(prefix + "dtlb", "");
+                string ptw = config.get<const char*>(prefix + "ptw", "");
 
                 string icache = config.get<const char*>(prefix + "icache");
                 string dcache = config.get<const char*>(prefix + "dcache");
@@ -1027,6 +1033,15 @@ static void InitSystem(Config& config) {
                         dt->setSourceId(coreIdx);
                     }
 
+                    PTW* p = nullptr;
+                    if (ptw != "") {
+                        PTWGroup& ptwgroup = *ptwMap[ptw];
+                        assert(cores == ptwgroup.size());
+                        p = dynamic_cast<PTW*>(ptwgroup[coreIdx]);
+                        assert(p);
+                        //p->setSourceId(coreIdx);
+                        info("set core's ptw");
+                    }
                     //Get the caches
                     CacheGroup& igroup = *cMap[icache];
                     CacheGroup& dgroup = *cMap[dcache];
@@ -1061,6 +1076,9 @@ static void InitSystem(Config& config) {
                         assert(type == "OOO");
                         OOOCore* ocore = new (&oooCores[j]) OOOCore(ic, dc, dt, name);
                         //OOOCore* ocore = new (&oooCores[j]) OOOCore(ic, dc, name);
+                        info("p->core")
+                        p->core = ocore;
+                        info("p->core end")
                         zinfo->eventRecorders[coreIdx] = ocore->getEventRecorder();
                         zinfo->eventRecorders[coreIdx]->setSourceId(coreIdx);
                         core = ocore;

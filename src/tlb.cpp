@@ -85,7 +85,7 @@ uint64_t TLB::access(const TransReq& req) {
     if (wayIdx == -1) {
         profLKUPMiss.inc();
         if (parent != nullptr) {
-          TransReq newReq = {req.pageAddr, req.childId, respCycle, req.childLock, req.srcId, req.flags};
+          TransReq newReq = {req.pageAddr, selfId, respCycle, &tlbLock, req.srcId, req.flags};
           uint64_t nextLevelLat = parent->access(newReq) - respCycle;
           profLKUPNextLevelLat.inc(nextLevelLat);
           respCycle += nextLevelLat;

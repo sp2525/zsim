@@ -87,6 +87,8 @@ struct TransInvReq {
 
 /* Base class for all memory objects (caches and memories) */
 class TransObject : public GlobAlloc {
+    protected:
+        uint32_t selfId;
     public:
         //Returns response cycle
         virtual uint64_t access(const TransReq& req) = 0;
@@ -94,6 +96,9 @@ class TransObject : public GlobAlloc {
 
         virtual void initStats(AggregateStat* parentStat) {}
         virtual const char* getName() = 0;
+        void setId(uint32_t _selfId) {
+          selfId = _selfId;
+        }
 };
 
 /* Base class for all tlb objects */

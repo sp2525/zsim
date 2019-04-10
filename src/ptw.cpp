@@ -113,8 +113,10 @@ uint64_t PTW::access(const TransReq& req) {
           memReq.cycle = respCycle;
           //info("level %d mem access addr: 0x%lx, cycle = %d, idx = 0x%x, pteAddr = 0x%lx, pageAddr = 0x%lx", l, memReq.lineAddr, memReq.cycle, idx, pteAddr, req.pageAddr);
           uint64_t memAccessLat = parentMem->access(memReq) - respCycle;
-          if(zinfo->eventRecorders[req.srcId])
-            zinfo->eventRecorders[req.srcId]->popRecord();
+
+          //If you want to use timing models with a weave phase(DDR mem, Timing cache), change code for handling events
+          //if(zinfo->eventRecorders[req.srcId])
+          //  zinfo->eventRecorders[req.srcId]->popRecord();
           profMemAccess.inc();
           profMemAccessLat.inc(memAccessLat);
           respCycle += memAccessLat;
