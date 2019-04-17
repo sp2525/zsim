@@ -67,6 +67,7 @@ class PTW : public BasePTW {
         Counter profINVALL;
         Counter profMemAccess;
         Counter profMemAccessLat;
+        Counter profWalkLat;
 
         //bool inclusive;
 

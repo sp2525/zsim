@@ -49,6 +49,7 @@ class VectorCounter;
 class AccessTraceWriter;
 class TraceDriver;
 template <typename T> class g_vector;
+typedef uint64_t Address;
 
 struct ClockDomainInfo {
     uint64_t realtimeOffsetNs;
